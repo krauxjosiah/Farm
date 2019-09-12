@@ -1,58 +1,211 @@
 package com.logicgate.farm.service;
 
 import com.logicgate.farm.domain.Animal;
+import com.logicgate.farm.domain.Barn;
+import com.logicgate.farm.domain.Color;
 import com.logicgate.farm.repository.AnimalRepository;
 import com.logicgate.farm.repository.BarnRepository;
 
+import com.logicgate.farm.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
+import java.util.*;
+import java.util.Map.*;
+import java.util.stream.*;
 
 @Service
 @Transactional
 public class AnimalServiceImpl implements AnimalService {
 
-  private final AnimalRepository animalRepository;
+    private final AnimalRepository animalRepository;
 
-  private final BarnRepository barnRepository;
+    private final BarnRepository barnRepository;
 
-  @Autowired
-  public AnimalServiceImpl(AnimalRepository animalRepository, BarnRepository barnRepository) {
-    this.animalRepository = animalRepository;
-    this.barnRepository = barnRepository;
-  }
+    @Autowired
+    public AnimalServiceImpl(AnimalRepository animalRepository, BarnRepository barnRepository) {
+        this.animalRepository = animalRepository;
+        this.barnRepository = barnRepository;
+    }
 
-  @Override
-  @Transactional(readOnly = true)
-  public List<Animal> findAll() {
-    return animalRepository.findAll();
-  }
+    @Override
+    @Transactional(readOnly = true)
+    public List<Animal> findAll() {
+        return animalRepository.findAll();
+    }
 
-  @Override
-  public void deleteAll() {
-    animalRepository.deleteAll();
-  }
+    @Override
+    public void deleteAll() {
+        animalRepository.deleteAll();
+    }
 
-  @Override
-  public Animal addToFarm(Animal animal) {
-    // TODO: implementation of this method
-    return null;
-  }
+    @Override
+    @Transactional
+    public Animal addToFarm(Animal animal) {
+        Color color = animal.getFavoriteColor();
+        List<Barn> barnsByColor = barnRepository.findAllByColor(color);
 
-  @Override
-  public void addToFarm(List<Animal> animals) {
-    animals.forEach(this::addToFarm);
-  }
+        if (barnsByColor.size() == 0) {
+            Random random = new Random();
+            int value = random.nextInt(1000);
+            Barn newBarn = new Barn(FarmUtils.barnName(value), color);
+            animal.setBarn(newBarn);
+            barnRepository.save(newBarn);
+            return animalRepository.save(animal);
+        }
 
-  @Override
-  public void removeFromFarm(Animal animal) {
-    // TODO: implementation of this method
-  }
+        Map<Barn, List<Animal>> barnAnimalMap = findAll()
+                .stream()
+                .filter(persistedAnimal -> animal.getFavoriteColor() == persistedAnimal.getFavoriteColor())
+                .collect(Collectors.groupingBy(Animal::getBarn));
+        Map<Barn, Integer> unusedCapacity = barnAnimalMap
+                .entrySet()
+                .stream()
+                .collect(Collectors.toMap(Entry::getKey, barn -> barn.getValue().size()));
 
-  @Override
-  public void removeFromFarm(List<Animal> animals) {
-    animals.forEach(animal -> removeFromFarm(animalRepository.getOne(animal.getId())));
-  }
+        Entry<Barn, Integer> highestVacancyBarn = Collections
+                .min(unusedCapacity.entrySet(), Comparator.comparingInt(Entry::getValue));
+
+        List<Animal> currentColorAnimals = findAll()
+                .stream()
+                .filter(filteredAnimal -> filteredAnimal.getFavoriteColor() == color)
+                .collect(Collectors.toList());
+        if (highestVacancyBarn.getValue() < FarmUtils.barnCapacity()) {
+            animal.setBarn(highestVacancyBarn.getKey());
+            return animalRepository.save(animal);
+        } else {
+            //Create a new barn add it to the list of barns
+            Random random = new Random();
+            int value = random.nextInt(1000);
+            barnsByColor.add(new Barn(FarmUtils.barnName(value), color));
+
+            currentColorAnimals.add(animal);
+
+            int minBarnCapacity = currentColorAnimals.size() / barnsByColor.size();
+
+            balanceBarns(barnsByColor, currentColorAnimals, minBarnCapacity);
+
+            return animalRepository.save(animal);
+        }
+    }
+
+    @Override
+    public void addToFarm(List<Animal> animals) {
+        animals.forEach(this::addToFarm);
+    }
+
+    @Override
+    @Transactional
+    public void removeFromFarm(Animal animal) {
+        //check if animal is persisted in the database
+        Optional<Animal> foundAnimal = animalRepository.findById(animal.getId());
+        if (!foundAnimal.isPresent()) {
+            return;
+        }
+        Map<Barn, List<Animal>> barnAnimalMap;
+        //Find all animals in the barn
+        barnAnimalMap = findAll()
+                .stream()
+                .filter(persistedAnimal -> animal.getFavoriteColor() == persistedAnimal.getFavoriteColor())
+                .collect(Collectors.groupingBy(Animal::getBarn));
+
+        //Only one barn
+        if (barnAnimalMap.size() == 1) {
+            List<Animal> currentAnimals = barnAnimalMap.entrySet()
+                                                       .iterator()
+                                                       .next()
+                                                       .getValue();
+
+            //when only 1 animal in the barn delete barn and animal
+            if (currentAnimals == null) {
+                return;
+            }
+            if (currentAnimals.size() == 1) {
+                barnRepository.delete(animal.getBarn());
+                animalRepository.delete(animal);
+            } else if (currentAnimals.size() > 1) {
+                //only delete animal
+                animalRepository.delete(animal);
+            } else {
+                //how did I get here?
+                animalRepository.delete(animal);
+            }
+            return;
+        }
+        //more than 1 barn might have to rebalance
+        //check if you should delete the barn
+        List<Animal> animalsInBarn = barnAnimalMap.values()
+                                                  .stream()
+                                                  .flatMap(List::stream)
+                                                  .collect(Collectors.toList());
+        animalsInBarn.remove(animal);
+
+        Set<Barn> matchingBarnsSet = barnAnimalMap.keySet();
+        List<Barn> matchingBarns = new ArrayList<>(matchingBarnsSet);
+        boolean deleteBarn = false;
+        int minBarnCapacity = animalsInBarn.size() / (matchingBarns.size() - 1);
+        int minBarnRemainder = animalsInBarn.size() % (matchingBarns.size() - 1);
+        int maxBarnCapacity = animalsInBarn.size() / matchingBarns.size();
+        Barn barnToRemove = matchingBarns.get(0);
+        if (minBarnCapacity <= FarmUtils.barnCapacity() && minBarnRemainder == 0) {
+            matchingBarns.remove(barnToRemove);
+            deleteBarn = true;
+            balanceBarns(matchingBarns, animalsInBarn, minBarnCapacity);
+        } else if (maxBarnCapacity <= FarmUtils.barnCapacity() && maxBarnCapacity > 1) {
+            balanceBarns(matchingBarns, animalsInBarn, maxBarnCapacity);
+        }
+
+        animalRepository.delete(animal);
+        if (deleteBarn) {
+            barnRepository.delete(barnToRemove);
+        }
+    }
+
+    @Override
+    public void removeFromFarm(List<Animal> animals) {
+        animals.forEach(animal -> removeFromFarm(animalRepository.getOne(animal.getId())));
+    }
+
+    private List<List<Animal>> groupAnimals(List<Animal> currentColorAnimals, Integer groupSize) {
+        List<List<Animal>> groupedAnimals = new ArrayList<>();
+
+        int startOfGroup = 0;
+        while (startOfGroup <= currentColorAnimals.size()) {
+            int endOfGroup = ((startOfGroup + groupSize) < currentColorAnimals
+                    .size()) ? startOfGroup + groupSize : currentColorAnimals.size();
+            groupedAnimals.add(new ArrayList<>(currentColorAnimals.subList(startOfGroup, endOfGroup)));
+            startOfGroup = startOfGroup + groupSize;
+        }
+        return groupedAnimals;
+    }
+
+    private void balanceBarns(List<Barn> barnsByColor, List<Animal> currentColorAnimals, int minBarnCapacity) {
+        //Group the animals by defined capacity
+        List<List<Animal>> groupedAnimals = groupAnimals(currentColorAnimals, minBarnCapacity);
+
+        //if there is a remainder add them to the other barns
+        if (groupedAnimals.size() > barnsByColor.size()) {
+            int i = 0;
+            List<Animal> leftOverAnimals = groupedAnimals.get(groupedAnimals.size() - 1); //remainder group
+            while (!leftOverAnimals.isEmpty()) {
+                List<Animal> currentGroup = groupedAnimals.get(i);
+                i++;
+                Animal currentAnimal = leftOverAnimals.get(0);
+                currentGroup.add(currentAnimal);
+                leftOverAnimals.remove(currentAnimal);
+            }
+            groupedAnimals.remove(leftOverAnimals);
+        }
+        //loop through and set the new barn
+        for (int i = 0; i < groupedAnimals.size(); i++) {
+            List<Animal> animalsToBarn = groupedAnimals.get(i);
+            for (Animal barnAnimal : animalsToBarn) {
+                barnAnimal.setBarn(barnsByColor.get(i));
+            }
+        }
+
+        barnRepository.saveAll(barnsByColor);
+        animalRepository.saveAll(currentColorAnimals);
+    }
 }

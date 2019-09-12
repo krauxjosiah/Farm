@@ -7,6 +7,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class FarmUtils {
 
   private static final String ANIMAL_NAME = "Animal-%d";
+  private static final String BARN_NAME = "Barn-%d";
 
   private static final int COLOR_SIZE = Color.values().length;
 
@@ -14,6 +15,10 @@ public final class FarmUtils {
 
   public static String animalName(int value) {
     return String.format(ANIMAL_NAME, value);
+  }
+
+  public static String barnName(int value) {
+    return String.format(BARN_NAME, value);
   }
 
   public static Color randomColor() {

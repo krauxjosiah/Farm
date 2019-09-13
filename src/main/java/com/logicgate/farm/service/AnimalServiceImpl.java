@@ -46,10 +46,8 @@ public class AnimalServiceImpl implements AnimalService {
         Color color = animal.getFavoriteColor();
         List<Barn> barnsByColor = barnRepository.findAllByColor(color);
 
-        if (barnsByColor.size() == 0) {
-            Random random = new Random();
-            int value = random.nextInt(1000);
-            Barn newBarn = new Barn(FarmUtils.barnName(value), color);
+        if (barnsByColor.isEmpty()) {
+            Barn newBarn = createBarn(color);
             animal.setBarn(newBarn);
             barnRepository.save(newBarn);
             return animalRepository.save(animal);
@@ -57,7 +55,7 @@ public class AnimalServiceImpl implements AnimalService {
 
         Map<Barn, List<Animal>> barnAnimalMap = findAll()
                 .stream()
-                .filter(persistedAnimal -> animal.getFavoriteColor() == persistedAnimal.getFavoriteColor())
+                .filter(persistedAnimal -> color == persistedAnimal.getFavoriteColor())
                 .collect(Collectors.groupingBy(Animal::getBarn));
 
         Map<Barn, Integer> unusedCapacity = barnAnimalMap
@@ -78,7 +76,7 @@ public class AnimalServiceImpl implements AnimalService {
             return animalRepository.save(animal);
         } else {
             //Create a new barn add it to the list of barns
-            barnsByColor.add(new Barn(FarmUtils.barnName(new Random().nextInt(1000)), color));
+            barnsByColor.add(createBarn(color));
 
             currentColorAnimals.add(animal);
 
@@ -88,6 +86,10 @@ public class AnimalServiceImpl implements AnimalService {
 
             return animalRepository.save(animal);
         }
+    }
+
+    private Barn createBarn(Color color) {
+        return new Barn(FarmUtils.barnName(new Random().nextInt(1000)), color);
     }
 
     @Override

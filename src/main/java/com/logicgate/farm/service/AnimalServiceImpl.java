@@ -59,6 +59,7 @@ public class AnimalServiceImpl implements AnimalService {
                 .stream()
                 .filter(persistedAnimal -> animal.getFavoriteColor() == persistedAnimal.getFavoriteColor())
                 .collect(Collectors.groupingBy(Animal::getBarn));
+
         Map<Barn, Integer> unusedCapacity = barnAnimalMap
                 .entrySet()
                 .stream()
@@ -71,14 +72,13 @@ public class AnimalServiceImpl implements AnimalService {
                 .stream()
                 .filter(filteredAnimal -> filteredAnimal.getFavoriteColor() == color)
                 .collect(Collectors.toList());
+
         if (highestVacancyBarn.getValue() < FarmUtils.barnCapacity()) {
             animal.setBarn(highestVacancyBarn.getKey());
             return animalRepository.save(animal);
         } else {
             //Create a new barn add it to the list of barns
-            Random random = new Random();
-            int value = random.nextInt(1000);
-            barnsByColor.add(new Barn(FarmUtils.barnName(value), color));
+            barnsByColor.add(new Barn(FarmUtils.barnName(new Random().nextInt(1000)), color));
 
             currentColorAnimals.add(animal);
 
@@ -98,14 +98,7 @@ public class AnimalServiceImpl implements AnimalService {
     @Override
     @Transactional
     public void removeFromFarm(Animal animal) {
-        //check if animal is persisted in the database
-        Optional<Animal> foundAnimal = animalRepository.findById(animal.getId());
-        if (!foundAnimal.isPresent()) {
-            return;
-        }
-        Map<Barn, List<Animal>> barnAnimalMap;
-        //Find all animals in the barn
-        barnAnimalMap = findAll()
+        Map<Barn, List<Animal>> barnAnimalMap = findAll()
                 .stream()
                 .filter(persistedAnimal -> animal.getFavoriteColor() == persistedAnimal.getFavoriteColor())
                 .collect(Collectors.groupingBy(Animal::getBarn));
@@ -117,10 +110,7 @@ public class AnimalServiceImpl implements AnimalService {
                                                        .next()
                                                        .getValue();
 
-            //when only 1 animal in the barn delete barn and animal
-            if (currentAnimals == null) {
-                return;
-            }
+            //when only 1 animal remaining the barn delete barn and animal
             if (currentAnimals.size() == 1) {
                 barnRepository.delete(animal.getBarn());
                 animalRepository.delete(animal);
@@ -141,25 +131,22 @@ public class AnimalServiceImpl implements AnimalService {
                                                   .collect(Collectors.toList());
         animalsInBarn.remove(animal);
 
-        Set<Barn> matchingBarnsSet = barnAnimalMap.keySet();
-        List<Barn> matchingBarns = new ArrayList<>(matchingBarnsSet);
-        boolean deleteBarn = false;
+        List<Barn> matchingBarns = new ArrayList<>(barnAnimalMap.keySet());
         int minBarnCapacity = animalsInBarn.size() / (matchingBarns.size() - 1);
         int minBarnRemainder = animalsInBarn.size() % (matchingBarns.size() - 1);
         int maxBarnCapacity = animalsInBarn.size() / matchingBarns.size();
         Barn barnToRemove = matchingBarns.get(0);
+
+        //check for remainder in case the barn capacity is 20 if so always go with maxBarns
         if (minBarnCapacity <= FarmUtils.barnCapacity() && minBarnRemainder == 0) {
             matchingBarns.remove(barnToRemove);
-            deleteBarn = true;
             balanceBarns(matchingBarns, animalsInBarn, minBarnCapacity);
+            barnRepository.delete(barnToRemove);
         } else if (maxBarnCapacity <= FarmUtils.barnCapacity() && maxBarnCapacity > 1) {
             balanceBarns(matchingBarns, animalsInBarn, maxBarnCapacity);
         }
 
         animalRepository.delete(animal);
-        if (deleteBarn) {
-            barnRepository.delete(barnToRemove);
-        }
     }
 
     @Override
